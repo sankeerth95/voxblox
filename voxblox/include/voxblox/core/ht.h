@@ -1,3 +1,8 @@
+
+#ifndef VOXBLOX_HT_H_
+#define VOXBLOX_HT_H_
+
+
 #include <iostream>
 #include <unordered_map>
 #include "/usr/include/eigen3/Eigen/Eigen"
@@ -5,22 +10,46 @@
 
 #include "voxblox/core/common.h"
 
+#include "voxblox/core/block_hash.h"
+
 //#define IN_SIM
 
-typedef Eigen::Vector3i ChunkID;
+namespace voxblox {
 
-struct ChunkHasher
-{
-    // Three large primes are used for spatial hashing.
-    static constexpr size_t p1 = 73856093;
-    static constexpr size_t p2 = 19349663;
-    static constexpr size_t p3 = 83492791;
+/**
+ * Performs deco hashing on block indexes. Based on recommendations of
+ * "Investigating the impact of Suboptimal Hashing Functions" by L. Buckley et
+ * al.
+ */
+struct AnyIndexHash {
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-    std::size_t operator()(const ChunkID& key) const
-    {
-        return ( key(0) * p1 ^ key(1) * p2 ^ key(2) * p3);
-    }
+  /// number was arbitrarily chosen with no good justification
+  static constexpr size_t sl = 17191;
+  static constexpr size_t sl2 = sl * sl;
+
+  std::size_t operator()(const AnyIndex& index) const {
+    return static_cast<unsigned int>(index.x() + index.y() * sl +
+                                     index.z() * sl2);
+  }
 };
+
+
+
+
+struct LongIndexHash {
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+  static constexpr size_t sl = 17191;
+  static constexpr size_t sl2 = sl * sl;
+
+  std::size_t operator()(const LongIndex& index) const {
+    return static_cast<unsigned int>(index.x() + index.y() * sl +
+                                     index.z() * sl2);
+  }
+};
+
+}
 
 
 template<typename T, typename U>
@@ -49,48 +78,43 @@ class MyUnorderedMap{
 
 
 template<typename T, typename U>
-struct HTBase{
+struct HTBase: 
+//std::unordered_map<T,U, voxblox::AnyIndexHash> 
+std::unordered_map< T, U, voxblox::AnyIndexHash, std::equal_to<T>,
+      Eigen::aligned_allocator<std::pair<const T, U> > >
+{
 
-	std::unordered_map<T, U, ChunkHasher> m;
+	typedef std::unordered_map< T, U, voxblox::AnyIndexHash, std::equal_to<T>,
+      Eigen::aligned_allocator<std::pair<const T, U> > > um;
+
 	static short tag;
 
 	HTBase(){
 		tag++;
 	}
 
-    size_t size() const{
-		return m.size();
-	}
 
-	void erase_custom(const T& k){
+	size_t erase(const T& k){
 		#ifdef IN_SIM
 		#endif // IN_SIM
-		m.erase(k);
+		return um::erase(k);
 	}
 
-	void clear_custom(){
+	void clear(){
 		#ifdef IN_SIM
 		// TODO: add this in?
 		#endif // IN_SIM
-		m.clear();
+		um::clear();
 	}
 
-	// added by Jenny 
-	U operator[] (const T& k){
-        return m[k];
-    }
 
-	// added by Jenny 
-	bool empty() const {
-        return m.empty();
-    }
 
-    auto begin() -> decltype(m.begin()){
-        return m.begin();
-    }
-    auto end() -> decltype(m.end()){
-        return m.end();
-    }
+  // auto begin() -> decltype(m.begin()){
+  //     return m.begin();
+  // }
+  // auto end() -> decltype(m.end()){
+  //     return m.end();
+  // }
 };
 
 template<typename T, typename U>
@@ -107,6 +131,29 @@ struct HT<T,U,StoreType::LITERAL> : HTBase<T,U> {
 //    sendInstruction( KVPointer<T,U>& t, const int cmd) const{
 //   	return SimUser(cmd, (uint64_t)&t);
 //    }
+
+
+	__attribute__((noinline)) void insert_custom(const std::pair<T,U> x){
+		#ifdef IN_SIM
+	// TODO: can we not add additional memory allocation
+		KVPointer<T,U> t = {this->tag, x.first, x.second};
+		long long _res;
+		__asm__ __volatile__ (                    \
+		"mov %1, %%" MAGIC_REG_A "\n"             \
+		"\tmov %2, %%" MAGIC_REG_B "\n"           \
+		"\tmov %3, %%" MAGIC_REG_C "\n"           \
+		"\txchg %%bx, %%bx\n"                     \
+		:  "=g" (_res)          				  \
+		: "g"(SIM_CMD_USER),                      \
+			"g"((uint64_t)0),                     \
+			"g"((uint64_t)&t)               	  \
+		: "%" MAGIC_REG_B, "%" MAGIC_REG_C );  
+
+		#endif // IN_SIM
+		this->insert(x);
+	}
+
+
 
 	__attribute__((noinline)) void insert_custom(const T& k, const U& v){
 		#ifdef IN_SIM
@@ -125,7 +172,7 @@ struct HT<T,U,StoreType::LITERAL> : HTBase<T,U> {
 		: "%" MAGIC_REG_B, "%" MAGIC_REG_C );  
 
 		#endif // IN_SIM
-		this->m.insert(std::make_pair(k,v));
+		this->insert(std::make_pair(k,v));
 	}
 
 	__attribute__((noinline)) U at_custom(const T& k, bool& found) const {
@@ -149,18 +196,16 @@ struct HT<T,U,StoreType::LITERAL> : HTBase<T,U> {
 		}
 		#endif // IN_SIM
 		
-		auto tmp = this->m.find(k);
-		if(tmp != this->m.end()) {
+		auto tmp = this->find(k);
+		if(tmp != this->end()) {
 			found = true;
 			return tmp->second;
-		} else {
+    } else {
 			found = false;
 			return U();
 		}
 	}
 };
-
-
 template<typename T, typename U>
 struct HT<T,U,StoreType::PTR_DEREFERENCED> : HTBase<T,U> {
 
@@ -169,9 +214,9 @@ struct HT<T,U,StoreType::PTR_DEREFERENCED> : HTBase<T,U> {
 //    sendInstruction( KVPointer<T,size_t>& t, const int cmd) const{
 //    	return SimUser(cmd, (uint64_t)&t);
 //    }
-
+// 
     __attribute__((noinline)) void insert_custom(const T& k, const U& v){
-		this->m.insert(std::make_pair(k,v));
+		this->insert(std::make_pair(k,v));
 		#ifdef IN_SIM
 	// TODO: can we not add additional memory allocation
 		KVPointer<T,size_t> t = {this->tag, k, (uint64_t)&v};
@@ -206,15 +251,15 @@ struct HT<T,U,StoreType::PTR_DEREFERENCED> : HTBase<T,U> {
 
 		if(t.v != 0) {
 			found = true;
-			return ((U*)t.v);
+			return *((U*)t.v);
 		}
 		#endif // IN_SIM
 		
 		auto tmp = this->find(k);
 		if(tmp != this->end()) {
 			found = true;
-			return &(tmp->second);
-//			return (this->at(k));
+			return &(*(tmp->second));
+			//return (this->at(k));
 		}
 		else {
 			found = false;
@@ -225,3 +270,4 @@ struct HT<T,U,StoreType::PTR_DEREFERENCED> : HTBase<T,U> {
 };
 
 
+#endif VOXBLOX_HT_H_
