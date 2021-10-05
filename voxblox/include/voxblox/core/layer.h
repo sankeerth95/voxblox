@@ -54,19 +54,30 @@ class Layer {
   enum class BlockMergingStrategy { kProhibit, kReplace, kDiscard, kMerge };
 
   inline const BlockType& getBlockByIndex(const BlockIndex& index) const {
+    // bool found = false;
+    // auto tmp = block_map_.at_custom(index, found);
+    // if(!found)
     typename BlockHashMap::const_iterator it = block_map_.find(index);
     if (it == block_map_.end()) {
       LOG(FATAL) << "Accessed unallocated block at " << index.transpose();
     }
     return *(it->second);
+
+    // return tmp;
   }
 
   inline BlockType& getBlockByIndex(const BlockIndex& index) {
+
+    // bool found = false;
+    // auto tmp = block_map_.at_custom(index, found);
+    // if(!found)
+
     typename BlockHashMap::iterator it = block_map_.find(index);
     if (it == block_map_.end()) {
       LOG(FATAL) << "Accessed unallocated block at " << index.transpose();
     }
     return *(it->second);
+    // return tmp;
   }
 
   inline typename BlockType::ConstPtr getBlockPtrByIndex(
@@ -152,6 +163,7 @@ class Layer {
   inline void insertBlock(
       const std::pair<const BlockIndex, typename Block<VoxelType>::Ptr>&
           block_pair) {
+//    block_map_.insert_custom(block_pair);
     auto insert_status = block_map_.insert(block_pair);
 
     DCHECK(insert_status.second) << "Block already exists when inserting at "
